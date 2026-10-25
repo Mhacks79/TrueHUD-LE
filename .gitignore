@@ -1,0 +1,17 @@
+# build output
+build/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.user
+.vs/
+
+# the game executable and the game's files are never committed
+TESV.exe
+*.exe
+*.bsa
+*.esm
+
+__pycache__/

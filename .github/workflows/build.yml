@@ -1,0 +1,72 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Build the plugin and the tests (Release, Win32)
+        shell: pwsh
+        run: ./Build.ps1 -Tests
+
+      - name: Check the DLL is 32-bit and exports the entry points
+        shell: pwsh
+        run: |
+          $dll = "build\TrueHUD.dll"
+          $bytes = [System.IO.File]::ReadAllBytes($dll)
+          $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+          $machine = [BitConverter]::ToUInt16($bytes, $pe + 4)
+          if ($machine -ne 0x14C) { throw "$dll is not an x86 DLL (machine $machine)" }
+          $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+          foreach ($name in @("SKSEPlugin_Query", "SKSEPlugin_Load", "RequestPluginAPI")) {
+            if (-not $text.Contains($name)) { throw "$dll is missing export $name" }
+          }
+          Write-Host "$dll : x86, $($bytes.Length) bytes, exports present"
+
+      # The offline fake-game harness: a fake Skyrim in this process. Not allowed to fail the build until it has run
+      # on a hosted runner at least once; see docs/STATUS.md.
+      - name: Run the offline harness
+        id: harness
+        continue-on-error: true
+        shell: pwsh
+        env:
+          FAKEGAME_TIMEOUT_MS: "30000"
+        run: |
+          python prepare_harness_fixtures.py
+          & build\TrueHUDHarness.exe
+          if ($LASTEXITCODE -ne 0) { throw "harness exited with $LASTEXITCODE" }
+
+      - name: Run the API probe against the actual DLL
+        continue-on-error: true
+        shell: pwsh
+        env:
+          FAKEGAME_TIMEOUT_MS: "30000"
+        run: |
+          & build\TrueHUDBinaryProbe.exe
+          if ($LASTEXITCODE -ne 0) { throw "probe exited with $LASTEXITCODE" }
+
+      - name: Collect the plugin and its licences
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package\SKSE\Plugins | Out-Null
+          Copy-Item build\TrueHUD.dll package\SKSE\Plugins\
+          Copy-Item COPYING, EXCEPTIONS, NOTICE.md package\
+          Copy-Item licenses package\licenses -Recurse
+
+      # Only the DLL and the licences: the converted plugin, scripts and movies are a separate mod archive.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TrueHUD-LE-dll
+          path: package

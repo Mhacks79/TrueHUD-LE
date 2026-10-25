@@ -1,0 +1,40 @@
+name: Bug report
+description: Something does not work in TrueHUD LE
+labels: [bug]
+body:
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: TrueHUD LE, Skyrim LE (1.9.32.0.8?), SKSE (1.7.3?) and SkyUI
+    validations:
+      required: true
+  - type: dropdown
+    id: widget
+    attributes:
+      label: Which part of the HUD
+      options: [Actor info bars, Boss bars, Player widget, Recent loot, Floating text, MCM, API / other plugin, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Other mods
+      description: HUD, UI and combat mods, other plugins using the TrueHUD API, ENB / ReShade. Does it still happen with them disabled?
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, screenshot or video
+      description: Documents\My Games\Skyrim\SKSE\TrueHUD.log and the SKSE log

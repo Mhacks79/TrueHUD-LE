@@ -1,0 +1,4 @@
+GreenSock AS2 / Jack Doyle. Original 2008-2014 copyright and terms notices
+are preserved in Source/original-TrueHUD/extern/GreenSock-AS2.
+Pinned source: cad14d031564f9c668309056619465721f7d4cb4.
+Original terms reference: http://www.greensock.com/terms_of_use.html
