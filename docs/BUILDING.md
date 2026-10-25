@@ -20,7 +20,7 @@ powershell -ExecutionPolicy Bypass -File Build.ps1 -Tests
 python prepare_harness_fixtures.py
 $env:FAKEGAME_TIMEOUT_MS = "30000"
 build\TrueHUDHarness.exe
-build\TrueHUDBinaryProbe.exe
+build\TrueHUDBinaryProbe.exe (Resolve-Path build\TrueHUD.dll).Path
 ```
 
 `-Tests` also builds the offline harness (a fake Skyrim inside a separate process, `harness/`) and the probe that loads

@@ -15,10 +15,11 @@ Recorded in [`SOURCE-VALIDATION.json`](SOURCE-VALIDATION.json), for the exact na
 | Late-exit check | 1 check, 0 failures |
 | Independent rebuild of the Test 5 sources | done before delivery; the SHA-256 of the rebuilt DLL is in the JSON |
 
-The same checks ran against these sources in the original workspace. This repository **re-lays out** the files
-(`src/`, `tests/`, `sdk/`, `harness/` at the top level instead of nested folders); the first build in GitHub Actions
-after that change is the check that the new layout builds. Look at the latest [Build](https://github.com/Mhacks79/TrueHUD-LE/actions/workflows/build.yml)
-run before trusting a checkout.
+These checks ran against the sources in the original workspace. This repository **re-lays out** the files (`src/`,
+`tests/`, `sdk/`, `harness/` at the top level instead of nested folders), and
+[GitHub Actions](https://github.com/Mhacks79/TrueHUD-LE/actions/workflows/build.yml) repeats the build and the checks on
+every push: the first run in the new layout built the DLL and the tests and reproduced **2619 checks, 0 failures** in
+the harness (run 40210015688). The API probe needs the DLL path as an argument; it is part of the workflow now.
 
 ## Reported in game
 

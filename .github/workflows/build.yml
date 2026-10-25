@@ -35,11 +35,8 @@ jobs:
           }
           Write-Host "$dll : x86, $($bytes.Length) bytes, exports present"
 
-      # The offline fake-game harness: a fake Skyrim in this process. Not allowed to fail the build until it has run
-      # on a hosted runner at least once; see docs/STATUS.md.
+      # The offline fake-game harness: a fake Skyrim in a separate process (2619 checks).
       - name: Run the offline harness
-        id: harness
-        continue-on-error: true
         shell: pwsh
         env:
           FAKEGAME_TIMEOUT_MS: "30000"
@@ -48,13 +45,13 @@ jobs:
           & build\TrueHUDHarness.exe
           if ($LASTEXITCODE -ne 0) { throw "harness exited with $LASTEXITCODE" }
 
+      # Loads the actual DLL, queries it and uses its public API (15 checks); never calls Load.
       - name: Run the API probe against the actual DLL
-        continue-on-error: true
         shell: pwsh
         env:
           FAKEGAME_TIMEOUT_MS: "30000"
         run: |
-          & build\TrueHUDBinaryProbe.exe
+          & build\TrueHUDBinaryProbe.exe (Resolve-Path build\TrueHUD.dll).Path
           if ($LASTEXITCODE -ne 0) { throw "probe exited with $LASTEXITCODE" }
 
       - name: Collect the plugin and its licences
