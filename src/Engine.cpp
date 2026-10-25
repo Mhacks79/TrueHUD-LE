@@ -158,7 +158,8 @@ namespace TrueHUDLE
 
     // The LE SDK handle lookup acquires BSHandleRefObject; release even on SEH.
     // No actor/scene pointer is published to the UI consumer.
-    bool SampleActor(UInt32 handle, ActorSample& sample, bool target)
+    bool SampleActor(UInt32 handle, ActorSample& sample, bool target,
+                     VisibilityState* visibility, ULONGLONG now, unsigned interval)
     {
         TESObjectREFR* ref = nullptr;
         TESObjectREFR* playerRef = nullptr;
@@ -244,9 +245,23 @@ namespace TrueHUDLE
                         // AL result. Player path aligns its own physics locals,
                         // bhkWorld::PickObject owns its read guard internally.
                         UInt8 detail = 0;
-                        sample.visible = LOSViewReady() && ::HasLOS(player, actor, &detail);
+                        if (!LOSViewReady()) {
+                            sample.visible = false;
+                            if (visibility) *visibility = {};
+                        } else if (visibility && interval && visibility->handle == handle &&
+                                   visibility->interval == interval && now < visibility->nextProbe) {
+                            sample.visible = visibility->value;
+                        } else {
+                            sample.visible = ::HasLOS(player, actor, &detail);
+                            // Distribute refreshes by handle phase instead of
+                            // synchronizing every actor on a single frame.
+                            const ULONGLONG due = interval ? now + interval -
+                                ((now + interval - handle % interval) % interval) : now;
+                            if (visibility) *visibility = {handle, due, interval, sample.visible};
+                        }
                     }
                 }
+                if (visibility && target) *visibility = {}; // target bypass never seeds a LOS result
                 sample.soul = SoulIcon(actor, sample.level);
                 const char* name = CALL_MEMBER_FN(actor, GetReferenceName)();
                 CopyString(name, sample.name, sizeof(sample.name));

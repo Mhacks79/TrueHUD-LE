@@ -3,6 +3,7 @@
 #include <windows.h>
 namespace TrueHUDLE {
     bool InitializeSettings();
+    bool LoggingEnabled();
     void CopySettings(Settings& output);
     double GetSetting(const char* id);
     bool SetSetting(const char* id, double value);

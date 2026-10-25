@@ -10,4 +10,7 @@ namespace TrueHUDLE {
     void ResetAPIColors();
     void ProcessAPIColor(const APICommand& command);
     UInt32 CopyAPIColors(UInt32 handle, Settings& settings);
+    UInt32 ReadAPIColorRevision(); // UI thread; changes only when a profile changes
+    struct ColorRevisionMemo { UInt32 actor = 0, epoch = 0, revision = 0; };
+    UInt32 ReadAPIColorRevision(UInt32 actor, ColorRevisionMemo& memo);
 }

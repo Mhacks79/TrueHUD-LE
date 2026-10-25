@@ -62,7 +62,14 @@ namespace TrueHUDLE
     bool Readable(const void* pointer, size_t length, bool object = true);
     bool Executable(const void* pointer);
     void CopyString(const char* source, char* output, size_t capacity);
-    bool SampleActor(UInt32 handle, ActorSample& sample, bool target = false);
+    struct VisibilityState {
+        UInt32 handle = 0;
+        ULONGLONG nextProbe = 0;
+        unsigned interval = 0;
+        bool value = false;
+    };
+    bool SampleActor(UInt32 handle, ActorSample& sample, bool target = false,
+                     VisibilityState* visibility = nullptr, ULONGLONG now = 0, unsigned interval = 0);
     bool IsPlayerAlly(Actor* actor);
     bool Project(const NiPoint3& world, float& x, float& y, float& depth, float* cameraDistance = nullptr);
     bool VerifyEngine();

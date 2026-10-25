@@ -13,6 +13,7 @@
 #include "LootIcons.h"
 #include "LootNotifications.h"
 #include "ProcessLifetime.h"
+#include "FileLogger.h"
 #include "skse/GameObjects.h"
 #include "../include/TrueHUDAPI.h"
 #include <memory>
@@ -34,7 +35,7 @@
 static const unsigned long gameBlocks[] = {
     0x00400000, 0x00430000, 0x00450000, 0x004A0000, 0x004D0000,
     0x00590000, 0x00650000, 0x006A0000, 0x006D0000, 0x006E0000, 0x00AB0000, 0x00F50000,
-    0x00850000, 0x00860000, 0x008C0000, 0x00A50000, 0x00A60000, 0x010D0000, 0x010E0000, 0x012B0000, 0x012E0000, 0x01310000, 0x01B20000, 0x01B30000
+    0x00850000, 0x00860000, 0x008C0000, 0x00920000, 0x00A50000, 0x00A60000, 0x010D0000, 0x010E0000, 0x012B0000, 0x012E0000, 0x01310000, 0x01B20000, 0x01B30000
 };
 FAKEGAME_CLAIM(gameBlocks)
 
@@ -65,11 +66,13 @@ namespace {
     };
     int failures = 0, checks = 0, faults = 0;
     int lookupCalls = 0, modifierCalls = 0, wrongSelf = 0, wrongMaximumCalls = 0;
+    unsigned formLookups = 0;
     int capturedSinks = 0;
     bool forceFault = false;
     bool resetDuringSample = false;
     bool sentientSoul = false;
     bool invisibleActor = false, hasLOS = true, losFault = false;
+    float healthOverride = -1;
     bool bulkHandles = false;
     bool mountedActor = false, mountSelf = false, mountFault = false;
     bool emptyMount = false;
@@ -292,7 +295,7 @@ namespace {
         FakeGame::NoteStackDepth();
         if (self != reinterpret_cast<char*>(actor) + 0x60 && self != reinterpret_cast<char*>(secondPlayerBytes) + 0x60) ++wrongSelf;
         if (emptyMount && self == reinterpret_cast<char*>(secondPlayerBytes) + 0x60 && av == 26) return 0;
-        return av == 0x36 ? (invisibleActor ? 100.f : 0.f) : av == 24 ? 135.f : av == 25 ? 40.f : 75.f;
+        return av == 0x36 ? (invisibleActor ? 100.f : 0.f) : av == 24 ? (healthOverride >= 0 ? healthOverride : 135.f) : av == 25 ? 40.f : 75.f;
     }
     float __fastcall WrongMaximum(void*, void*, UInt32) { ++wrongMaximumCalls; return 100.f; }
     float __fastcall Modifier(Actor* self, void*, UInt32 which, UInt32 av) {
@@ -331,7 +334,7 @@ namespace {
         else crosshair = static_cast<BSTEventSink<SKSECrosshairRefEvent>*>(sink);
         ++capturedSinks;
     }
-    TESForm* __cdecl LookupForm(UInt32 id) { return id == 0x1234 ? reinterpret_cast<TESForm*>(lootFormBytes) : nullptr; }
+    TESForm* __cdecl LookupForm(UInt32 id) { ++formLookups; return id == 0x1234 ? reinterpret_cast<TESForm*>(lootFormBytes) : nullptr; }
     void* __cdecl CastForm(void* form, UInt32, const void*, const void* targetType, UInt32) {
         if (form == lootFormBytes && targetType == RTTI_TESFullName) return lootNameBytes;
         return form == actor->baseForm && targetType == RTTI_BGSKeywordForm ? keywordBytes : nullptr;
@@ -382,6 +385,9 @@ namespace {
     }
 }
 namespace TrueHUDLE {
+    void WriteTestLog(FileLogger& logger, bool enabled, const char* format, ...) {
+        va_list args; va_start(args, format); logger.Write(enabled, format, args); va_end(args);
+    }
     void Log(const char*, ...) {}
     int Fault(const char* context, EXCEPTION_POINTERS*) {
         printf("guarded test fault: %s\n", context); ++faults; return EXCEPTION_EXECUTE_HANDLER;
@@ -936,6 +942,48 @@ void RunTests() {
     invisibleActor = false;
     *reinterpret_cast<void**>(0x01B2E8BC) = nullptr;
     Check(SampleActor(7, sample) && !sample.visible && losCalls == beforeTarget, "missing LOS graph hides bar without calling unready engine");
+    *reinterpret_cast<void**>(0x01B2E8BC) = losGraphBytes;
+    VisibilityState visibility;
+    hasLOS = true;
+    const unsigned beforeReuse = losCalls;
+    Check(SampleActor(7, sample, false, &visibility, 1000, 100) && sample.visible,
+          "first visibility observation queries the live engine");
+    hasLOS = false;
+    Check(SampleActor(7, sample, false, &visibility, 1001, 100) && sample.visible && losCalls == beforeReuse + 1,
+          "ordinary actor visibility reuses only the bounded scalar LOS result");
+    invisibleActor = true;
+    Check(SampleActor(7, sample, false, &visibility, 1002, 100) && !sample.visible,
+          "invisibility is read immediately even between visibility probes");
+    invisibleActor = false;
+    Check(SampleActor(7, sample, false, &visibility, 1100, 100) && !sample.visible && losCalls == beforeReuse + 2,
+          "expired visibility probes observe changed world occlusion");
+    hasLOS = true;
+    Check(SampleActor(7, sample, false, &visibility, 1101, 0) && sample.visible && losCalls == beforeReuse + 3,
+          "zero visibility interval restores per-frame physics checks");
+    *reinterpret_cast<void**>(0x01B2E8BC) = nullptr;
+    Check(SampleActor(7, sample, false, &visibility, 1102, 100) && !sample.visible && !visibility.handle,
+          "unready LOS graph invalidates a previous visibility result immediately");
+    *reinterpret_cast<void**>(0x01B2E8BC) = losGraphBytes;
+    VisibilityState crowdVisibility[MaxActors];
+    bulkHandles = true;
+    const unsigned crowdLOSStart = losCalls;
+    unsigned peakRefresh = 0;
+    bool liveValues = true;
+    for (unsigned tick = 0; tick < 60; ++tick) {
+        const unsigned beforeTick = losCalls;
+        healthOverride = 135.f - tick * .5f;
+        for (unsigned i = 0; i < MaxActors; ++i)
+            liveValues = SampleActor(100+i, sample, false, &crowdVisibility[i], tick*16, 100) &&
+                         sample.current[0] == healthOverride && liveValues;
+        if (tick) peakRefresh = std::max(peakRefresh, losCalls - beforeTick);
+    }
+    healthOverride = -1;
+    bulkHandles = false;
+    const unsigned crowdQueries = losCalls - crowdLOSStart;
+    printf("crowd fixture:128 actor handles x60 ticks, LOS=%u instead of7680, post-first peak=%u; resources sampled every tick\n", crowdQueries, peakRefresh);
+    Check(crowdQueries <= 1400 && crowdQueries > MaxActors && peakRefresh < MaxActors/2,
+          "128-handle crowd amortizes and staggers LOS probes without slowing live resource reads");
+    Check(liveValues, "every crowd resource snapshot follows the current changing value");
     Check(reinterpret_cast<Actor*>(secondPlayerBytes)->handleRefObject.GetRefCount() == 1 && actor->handleRefObject.GetRefCount() == 1,
           "LOS sampling releases both target and player pins");
     *g_thePlayer = reinterpret_cast<PlayerCharacter*>(actor);
@@ -986,6 +1034,25 @@ void RunTests() {
         VirtualFree(region, 0, MEM_RELEASE);
     }
     Check(!SetSetting("missing:General", 1), "unknown setting refused");
+    Check(!LoggingEnabled() && SetSetting("bEnableLogging:General", 1) && LoggingEnabled(),
+          "LE logger defaults off and accepts an enabled setting");
+    SetSetting("bEnableLogging:General", 0);
+    Check(!LoggingEnabled(), "disabling logger updates its atomic fast gate");
+    SetSetting("uVisibilityUpdateIntervalMS:Performance", 999);
+    Check(GetSetting("uVisibilityUpdateIntervalMS:Performance") == 250, "visibility latency is clamped to250ms");
+    SetSetting("uVisibilityUpdateIntervalMS:Performance", 100);
+    FILE* logTest = nullptr; tmpfile_s(&logTest);
+    Check(logTest != nullptr, "isolated file logger fixture opens");
+    if (logTest) {
+        FileLogger testLogger(logTest);
+        WriteTestLog(testLogger, false, "disabled");
+        Check(ftell(logTest) == 0, "disabled production logger writes no bytes");
+        WriteTestLog(testLogger, true, "enabled %d", 42);
+        const long written = ftell(logTest);
+        WriteTestLog(testLogger, false, "must not append");
+        Check(written > 0 && ftell(logTest) == written, "logger can be enabled and disabled without further writes");
+        fclose(logTest);
+    }
     auto nativeCharges = reinterpret_cast<float*>(0x012B2F90);
     nativeCharges[0] = 25; nativeCharges[1] = 75;
     *reinterpret_cast<UInt8*>(0x01B3EA69) = 1;
@@ -1195,6 +1262,18 @@ void RunTests() {
     RequestFrame(); Drain(); CopyFrame(fixtureFrame);
     Check(fixtureFrame.lootCount == 1 && fixtureFrame.loot[0].count == 2 &&
           !strcmp(fixtureFrame.loot[0].name, "Test ingredient"), "loot event resolves plain name and count on sample task");
+    const unsigned lootLookups = formLookups;
+    for (unsigned i = 0; i < 60; ++i) { RequestFrame(); Drain(); }
+    CopyFrame(fixtureFrame);
+    Check(formLookups == lootLookups && fixtureFrame.lootCount == 1 && fixtureFrame.loot[0].count == 2,
+          "unchanged loot event is copied as scalars without repeated form lookup or classification");
+    ResetState(true);
+    reinterpret_cast<TESFullName*>(lootNameBytes)->name.data = "After load";
+    container->ReceiveEvent(&lootEvent, nullptr);
+    RequestFrame(); Drain(); CopyFrame(fixtureFrame);
+    Check(fixtureFrame.lootCount == 1 && !strcmp(fixtureFrame.loot[0].name, "After load"),
+          "new generation cannot reuse a previous loot serial snapshot");
+    const UInt32 firstLootSerial = fixtureFrame.loot[0].serial;
     lootEvent.fromFormId = 0x14;
     container->ReceiveEvent(&lootEvent, nullptr);
     lootEvent.fromFormId = 0; lootEvent.count = 0xFFFFFFFF;
@@ -1205,8 +1284,8 @@ void RunTests() {
     lootEvent.count = 1;
     for (unsigned i = 0; i < MaxLoot + 5; ++i) container->ReceiveEvent(&lootEvent, nullptr);
     RequestFrame(); Drain(); CopyFrame(fixtureFrame);
-    Check(fixtureFrame.lootCount == MaxLoot && fixtureFrame.loot[0].serial == 7 &&
-          fixtureFrame.loot[MaxLoot - 1].serial == MaxLoot + 6, "loot ring keeps newest entries in chronological order");
+    Check(fixtureFrame.lootCount == MaxLoot && fixtureFrame.loot[0].serial == firstLootSerial + 6 &&
+          fixtureFrame.loot[MaxLoot - 1].serial == firstLootSerial + MaxLoot + 5, "loot ring keeps newest entries in chronological order");
     ResetState(true); RequestFrame(); Drain(); CopyFrame(fixtureFrame);
     Check(fixtureFrame.lootCount == 0, "save/load reset clears transient loot events");
     auto otherActor = reinterpret_cast<Actor*>(secondPlayerBytes);
@@ -1256,6 +1335,14 @@ void RunTests() {
     }
     Check(fixtureFrame.count == MaxActors && currentFound && !oldestFound,
           "full tracker admits current target by replacing oldest unrelated actor");
+    SetSetting("bEnableActorInfoBars:General", 0); SetSetting("bEnableBossBars:General", 0);
+    const unsigned disabledLookups = lookupCalls;
+    RequestFrame(); Drain(); CopyFrame(fixtureFrame);
+    Check(fixtureFrame.count == 0 && lookupCalls == disabledLookups + 1,
+          "disabled actor and boss features skip all crowd sampling while keeping the player live");
+    SetSetting("bEnableActorInfoBars:General", 1); SetSetting("bEnableBossBars:General", 1);
+    RequestFrame(); Drain(); CopyFrame(fixtureFrame);
+    Check(fixtureFrame.count == MaxActors, "reenabling actor features resumes the retained tracker");
     bulkHandles = false;
     ResetState(true);
     SKSECrosshairRefEvent event(actor);

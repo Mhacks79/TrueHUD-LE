@@ -8,6 +8,7 @@
 namespace TrueHUDLE {
     namespace {
         Settings current;
+        volatile LONG loggingEnabled = 0;
         SRWLOCK configLock = SRWLOCK_INIT;
         char defaultsPath[MAX_PATH] = {}, overridesPath[MAX_PATH] = {};
 
@@ -80,6 +81,7 @@ namespace TrueHUDLE {
         output = current;
         ReleaseSRWLockShared(&configLock);
     }
+    bool LoggingEnabled() { return InterlockedCompareExchange(&loggingEnabled, 0, 0) != 0; }
     double GetSetting(const char* id) {
         const auto e = Find(id);
         if (!e) return 0;
@@ -93,6 +95,7 @@ namespace TrueHUDLE {
         if (!e) return false;
         AcquireSRWLockExclusive(&configLock);
         *reinterpret_cast<double*>(reinterpret_cast<char*>(&current) + e->offset) = Clamp(*e, value);
+        InterlockedExchange(&loggingEnabled, current.bEnableLogging != 0);
         ReleaseSRWLockExclusive(&configLock);
         return true;
     }
@@ -102,6 +105,7 @@ namespace TrueHUDLE {
         ReadFile(overridesPath, next);
         AcquireSRWLockExclusive(&configLock);
         current = next;
+        InterlockedExchange(&loggingEnabled, current.bEnableLogging != 0);
         ReleaseSRWLockExclusive(&configLock);
         return true;
     }

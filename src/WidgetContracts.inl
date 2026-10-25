@@ -161,8 +161,8 @@ GFxValue args[4];
 		object.Invoke("loadConfig", nullptr, args, 4);
 }
 
-void ConfigureShoutIndicator(GFxValue& object, const Settings& settings, float opacity, float width, float height) {
+bool ConfigureShoutIndicator(GFxValue& object, const Settings& settings, float opacity, float width, float height) {
 GFxValue arg;
 		arg.SetNumber((settings.bBossBarUseHUDOpacity ? opacity : settings.fBossBarOpacity) * 100.f);
-		object.Invoke("loadConfig", nullptr, &arg, 1);
+		return object.Invoke("loadConfig", nullptr, &arg, 1);
 }

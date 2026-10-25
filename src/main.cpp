@@ -1,6 +1,7 @@
 #include "Runtime.h"
 #include "HUDSignals.h"
 #include "Settings.h"
+#include "FileLogger.h"
 #include "DamageSignals.h"
 #include "LootNotifications.h"
 #include "skse/skse_version.h"
@@ -10,23 +11,17 @@
 
 namespace TrueHUDLE {
     namespace {
-        FILE* logFile = nullptr;
-        SRWLOCK logLock = SRWLOCK_INIT;
+        FileLogger logger;
         volatile LONG faults = 0;
         DWORD loadThread = 0;
         _purecall_handler previousPurecall = nullptr;
     }
     void Log(const char* format, ...) {
-        AcquireSRWLockExclusive(&logLock);
-        if (logFile) {
-            va_list args;
-            va_start(args, format);
-            vfprintf(logFile, format, args);
-            va_end(args);
-            fputc('\n', logFile);
-            fflush(logFile);
-        }
-        ReleaseSRWLockExclusive(&logLock);
+        if (!LoggingEnabled()) return;
+        va_list args;
+        va_start(args, format);
+        logger.Write(true, format, args);
+        va_end(args);
     }
     bool Disabled() { return InterlockedCompareExchange(&faults, 0, 0) >= 3; }
     static void LogPurecallBody() {
@@ -95,16 +90,17 @@ namespace TrueHUDLE {
         loadThread = GetCurrentThreadId();
         if (SUCCEEDED(SHGetFolderPathA(nullptr, CSIDL_MYDOCUMENTS, nullptr, 0, path))) {
             strcat_s(path, "\\My Games\\Skyrim\\SKSE\\TrueHUD.log");
-            fopen_s(&logFile, path, "w");
+            logger.SetPath(path);
         }
         previousPurecall = _set_purecall_handler(OnPurecall);
-        Log("TrueHUD LE Test 5 / original Ersh TrueHUD 1.1.10; thread=%lu", loadThread);
+        if (!InitializeSettings()) return false;
+        Log("TrueHUD LE Test 7 / original Ersh TrueHUD 1.1.10; thread=%lu", loadThread);
         auto messaging = static_cast<SKSEMessagingInterface*>(skse->QueryInterface(kInterface_Messaging));
         auto tasks = static_cast<SKSETaskInterface*>(skse->QueryInterface(kInterface_Task));
         auto papyrus = static_cast<SKSEPapyrusInterface*>(skse->QueryInterface(kInterface_Papyrus));
         if (!messaging || messaging->interfaceVersion < SKSEMessagingInterface::kInterfaceVersion ||
             !tasks || tasks->interfaceVersion < SKSETaskInterface::kInterfaceVersion ||
-            !papyrus || !InitializeSettings()) { Log("Required interface/settings initialization failed"); return false; }
+            !papyrus) { Log("Required interface/settings initialization failed"); return false; }
         if (!papyrus->Register(RegisterPapyrus)) return false;
         InitializeState(tasks);
         InitializeUI(tasks);

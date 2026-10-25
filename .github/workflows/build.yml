@@ -35,7 +35,7 @@ jobs:
           }
           Write-Host "$dll : x86, $($bytes.Length) bytes, exports present"
 
-      # The offline fake-game harness: a fake Skyrim in a separate process (2619 checks).
+      # The offline fake-game harness: a fake Skyrim in a separate process (2601 checks).
       - name: Run the offline harness
         shell: pwsh
         env:
@@ -59,10 +59,12 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force package\SKSE\Plugins | Out-Null
           Copy-Item build\TrueHUD.dll package\SKSE\Plugins\
+          New-Item -ItemType Directory -Force package\SKSE\Plugins\TrueHUD | Out-Null
+          Copy-Item config\TrueHUD_LE.ini package\SKSE\Plugins\TrueHUD\
           Copy-Item COPYING, EXCEPTIONS, NOTICE.md package\
           Copy-Item licenses package\licenses -Recurse
 
-      # Only the DLL and the licences: the converted plugin, scripts and movies are a separate mod archive.
+      # DLL, native options and licences only: the converted plugin, scripts and movies are a separate mod archive.
       - uses: actions/upload-artifact@v4
         with:
           name: TrueHUD-LE-dll

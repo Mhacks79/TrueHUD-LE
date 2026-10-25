@@ -7,6 +7,8 @@
 #include "APIUIState.h"
 #include "SpecialResources.h"
 #include "DebugDraw.h"
+#include "DisplayMemo.h"
+#include "Timing.h"
 #include "LootNotifications.h"
 #include "skse/Hooks_UI.h"
 #include "skse/ScaleformAPI.h"
@@ -35,7 +37,10 @@ namespace TrueHUDLE {
             float depth = 0;
             bool specialAvailable = false;
             UInt32 colorRevision = 0;
+            ColorRevisionMemo colorMemo;
             UInt8 removal = 255;
+            DisplayMemo position;
+            double sortedDepth = 0;
         };
         struct FloatingWidget {
             UInt32 serial = 0;
@@ -44,11 +49,12 @@ namespace TrueHUDLE {
             UInt32 color = 0;
             char text[32] = {};
             GFxValue object, depthRow;
+            double sortedDepth = 0;
         };
         struct CustomHost {
             GFxMovieView*& view;
-            struct Row { UInt32 owner = 0, type = 0, id = 0; bool used = false; GFxValue value; } rows[64];
-            struct Depth { UInt32 owner = 0; bool used = false; GFxValue array; } depths[32];
+            struct Row { UInt32 owner = 0, type = 0, id = 0; bool used = false, known = false; double lastDepth = 0; GFxValue value; } rows[64];
+            struct Depth { UInt32 owner = 0; bool used = false, changed = true; GFxValue array; } depths[32];
             bool dirty = true;
             bool Load(UInt32 owner, const char* path) {
                 GFxValue args[2], result; args[0].SetNumber(owner); args[1].SetString(path);
@@ -83,7 +89,7 @@ namespace TrueHUDLE {
                 for (auto& depth : depths) { depth.used = false; depth.array.SetUndefined(); }
                 dirty = true;
             }
-            void Sort(CustomWidgetRegistry<CustomHost>& registry) {
+            template<class Registry> void Sort(Registry& registry) {
                 if (dirty) {
                     for (auto& depth : depths) { depth.used = false; depth.array.SetUndefined(); }
                     for (auto& row : rows) if (row.used) {
@@ -96,7 +102,7 @@ namespace TrueHUDLE {
                         if (!selected->used) {
                             selected->owner = row.owner; view->CreateArray(&selected->array);
                             if (selected->array.GetType() != GFxValue::kType_Array) return;
-                            selected->used = true;
+                            selected->used = true; selected->changed = true;
                         }
                         row.value.SetUndefined(); view->CreateObject(&row.value);
                         if (!row.value.IsObject()) return;
@@ -105,22 +111,29 @@ namespace TrueHUDLE {
                         value.SetNumber(row.type); if (!row.value.SetMember("widgetType", &value)) return;
                         value.SetNumber(0); if (!row.value.SetMember("zIndex", &value)) return;
                         if (!selected->array.PushBack(&row.value)) return;
+                        row.known = false;
                     }
                     dirty = false;
                 }
                 registry.Visit([&](UInt32 owner, UInt32 type, UInt32 id, TRUEHUD_API::WidgetBase& widget) {
                     for (auto& row : rows) if (row.used && row.owner == owner && row.type == type && row.id == id) {
-                        GFxValue value; value.SetNumber(std::isfinite(widget._depth) ? widget._depth : 0);
-                        row.value.SetMember("zIndex", &value); break;
+                        const double z = std::isfinite(widget._depth) ? widget._depth : 0;
+                        if (!row.known || row.lastDepth != z) {
+                            GFxValue value; value.SetNumber(z);
+                            if (!row.value.SetMember("zIndex", &value)) return;
+                            row.lastDepth = z; row.known = true;
+                            for (auto& depth : depths) if (depth.used && depth.owner == owner) depth.changed = true;
+                        }
+                        break;
                     }
                 });
-                for (auto& depth : depths) if (depth.used) {
+                for (auto& depth : depths) if (depth.used && depth.changed) {
                     // GFxValue has no safe shallow copy in the LE SDK. Put the
                     // array directly in its final argument slot through GFx.
                     GFxValue args[2]; args[0].SetNumber(depth.owner);
                     view->SetVariable("_root.__TrueHUDCustomDepth", &depth.array, 0);
-                    if (view->GetVariable(&args[1], "_root.__TrueHUDCustomDepth"))
-                        view->Invoke("_root.TrueHUD.SortCustomWidgetDepths", nullptr, args, 2);
+                    if (view->GetVariable(&args[1], "_root.__TrueHUDCustomDepth") &&
+                        view->Invoke("_root.TrueHUD.SortCustomWidgetDepths", nullptr, args, 2)) depth.changed = false;
                 }
             }
         };
@@ -129,12 +142,13 @@ namespace TrueHUDLE {
             // to the mask scale. Opacity and native charge meters use other units.
             return maximum > 0 ? std::clamp(current / maximum, 0.f, 1.f) : 0.f;
         }
-        void Position(GFxValue& object, double x, double y, double scale, bool visible = true) {
+        void Position(GFxValue& object, double x, double y, double scale, bool visible = true, DisplayMemo* memo = nullptr) {
+            if (memo && memo->Matches(object.data.obj, x, y, scale, visible)) return;
             GFxValue::DisplayInfo display;
             display.SetPosition(x, y);
             display.SetScale(scale, scale);
             display.SetVisible(visible);
-            object.SetDisplayInfo(&display);
+            if (object.SetDisplayInfo(&display) && memo) memo->Remember(object.data.obj, x, y, scale, visible);
         }
         struct HUDNumberAccess {
             using Movie = GFxMovieView;
@@ -163,15 +177,21 @@ namespace TrueHUDLE {
         template<class> struct MenuMessageArgument;
         template<class R, class C, class A> struct MenuMessageArgument<R(C::*)(A)> { using type = A; };
         using MenuMessagePointer = MenuMessageArgument<decltype(&IMenu::ProcessUnkData1)>::type;
+        struct UIRegressionAccess;
         class TrueHUDMenu final : public IMenu {
+            friend struct UIRegressionAccess;
             CustomHost customHost{view};
             CustomWidgetRegistry<CustomHost> custom{customHost, customDefinitions};
             Widget widgets[MaxActors];
             FloatingWidget floatingWidgets[MaxFloating];
             UInt32 lastFloatingSerial = 0;
             GFxValue playerWidget, lootWidget, shoutWidget;
+            DisplayMemo playerPosition, lootPosition, shoutPosition;
+            bool shoutConfigured = false;
+            double shoutOpacity = 0;
             GFxValue depthArray;
             bool depthTopologyChanged = true;
+            bool depthOrderDirty = true;
             unsigned depthExtras = 0;
             Frame frame;
             UInt32 lastGeneration = 0;
@@ -181,6 +201,7 @@ namespace TrueHUDLE {
             bool playerSpecialAvailable = false;
             UInt32 resourceRevision = 0;
             UInt32 playerColorRevision = 0;
+            ColorRevisionMemo playerColorMemo;
             float voiceCooldown = 0;
             float shoutProgress = 1;
             HUDNumberOverride<HUDBoolAccess> healthVisible{"_root.HUDMovieBaseInstance.Health._visible"};
@@ -194,6 +215,7 @@ namespace TrueHUDLE {
             HUDNumberOverride<HUDNumberAccess> compassAlpha{"_root.HUDMovieBaseInstance.CompassShoutMeterHolder._alpha"};
             HUDNumberOverride<HUDNumberAccess> subtitleY{"_root.HUDMovieBaseInstance.SubtitleTextHolder._y"};
             unsigned visibleBosses = 0;
+            Timing timing{"UI"}; // phases: native UI work, movie advance, movie render
             bool disabledCleared = false;
             HUDSignals previousSignals;
             unsigned traceCount = 0;
@@ -207,6 +229,7 @@ namespace TrueHUDLE {
             }
 
             void TraceUI(unsigned mode, bool hudOpen, bool showMenus, bool cart, bool visibilityCall) {
+                if (!LoggingEnabled()) return; // skip diagnostic GFx probes as well as disk output
                 const ULONGLONG now = GetTickCount64();
                 if (traceCount >= 32) return;
                 if (traceCount && frame.ready == lastTraceReady && mode == lastTraceMode &&
@@ -272,6 +295,8 @@ namespace TrueHUDLE {
                 widget.configured = false;
                 widget.removal = 255;
                 widget.colorRevision = 0;
+                widget.colorMemo = {};
+                widget.position.Reset();
                 depthTopologyChanged = true;
             }
             void RestoreBars() {
@@ -332,7 +357,9 @@ namespace TrueHUDLE {
                     view->Invoke("_root.TrueHUD.RemoveShoutIndicatorWidget", nullptr, static_cast<GFxValue*>(nullptr), 0);
                 }
                 playerWidget.SetUndefined(); lootWidget.SetUndefined(); shoutWidget.SetUndefined();
-                depthArray.SetUndefined(); depthTopologyChanged = true; depthExtras = 0;
+                playerPosition.Reset(); lootPosition.Reset(); shoutPosition.Reset(); shoutConfigured = false;
+                playerColorMemo = {};
+                depthArray.SetUndefined(); depthTopologyChanged = true; depthOrderDirty = true; depthExtras = 0;
                 settingsKnown = false;
                 voiceCooldown = 0;
                 shoutProgress = 1;
@@ -352,12 +379,12 @@ namespace TrueHUDLE {
                     return;
                 }
                 const bool newlyCreated = !lootWidget.IsDisplayObject();
-                if (newlyCreated) view->Invoke("_root.TrueHUD.AddRecentLootWidget", &lootWidget, static_cast<GFxValue*>(nullptr), 0);
+                if (newlyCreated) { lootPosition.Reset(); view->Invoke("_root.TrueHUD.AddRecentLootWidget", &lootWidget, static_cast<GFxValue*>(nullptr), 0); }
                 if (!lootWidget.IsDisplayObject()) return;
                 if (!settingsKnown || newlyCreated)
                     ConfigureRecentLoot(lootWidget, settings, opacity, rect.right - rect.left, rect.bottom - rect.top);
                 Position(lootWidget, rect.left + (rect.right - rect.left) * settings.fRecentLootX,
-                         rect.top + (rect.bottom - rect.top) * settings.fRecentLootY, settings.fRecentLootScale * 100);
+                         rect.top + (rect.bottom - rect.top) * settings.fRecentLootY, settings.fRecentLootScale * 100, true, &lootPosition);
                 for (unsigned i = 0; i < frame.lootCount; ++i) {
                     const auto& item = frame.loot[i];
                     if (item.serial <= lastLootSerial) continue;
@@ -379,12 +406,15 @@ namespace TrueHUDLE {
                     }
                     return;
                 }
-                if (!playerWidget.IsDisplayObject())
+                if (!playerWidget.IsDisplayObject()) {
+                    playerPosition.Reset();
                     view->Invoke("_root.TrueHUD.AddPlayerWidget", &playerWidget, static_cast<GFxValue*>(nullptr), 0);
+                }
                 if (!playerWidget.IsDisplayObject()) return; // submovie still loading: retry later
-                Settings colored = settings;
-                const UInt32 revision = CopyAPIColors(frame.player.handle, colored);
+                const UInt32 revision = ReadAPIColorRevision(frame.player.handle, playerColorMemo);
                 if (!settingsKnown || playerSpecialAvailable != frame.player.special.available || revision != playerColorRevision) {
+                    Settings colored = settings;
+                    CopyAPIColors(frame.player.handle, colored);
                     ConfigurePlayerWidget(playerWidget, colored, opacity, rect.right - rect.left, rect.bottom - rect.top,
                                           frame.player.special.specialMode, frame.player.special.available);
                     playerSpecialAvailable = frame.player.special.available;
@@ -396,7 +426,7 @@ namespace TrueHUDLE {
                 }
                 Position(playerWidget, settings.bPlayerWidgetCombined ? rect.left + (rect.right - rect.left) * settings.fPlayerWidgetX : 0,
                          settings.bPlayerWidgetCombined ? rect.top + (rect.bottom - rect.top) * settings.fPlayerWidgetY : 0,
-                         settings.fPlayerWidgetScale * 100);
+                         settings.fPlayerWidgetScale * 100, true, &playerPosition);
                 GFxValue data[12];
                 const bool mountMode = settings.bPlayerWidgetDisplayMountStamina != 0 && frame.player.mounted;
                 for (unsigned i = 0; i < 3; ++i) {
@@ -532,9 +562,10 @@ namespace TrueHUDLE {
                         Remove(widget);
                         continue;
                     }
-                    Settings colored = settings;
-                    const UInt32 revision = CopyAPIColors(sample.handle, colored);
+                    const UInt32 revision = ReadAPIColorRevision(sample.handle, widget.colorMemo);
                     if (!widget.configured || !settingsKnown || widget.specialAvailable != sample.special.available || revision != widget.colorRevision) {
+                        Settings colored = settings;
+                        CopyAPIColors(sample.handle, colored);
                         if (widget.boss) ConfigureBossInfoBar(widget.object, colored, opacity, rect.right - rect.left, rect.bottom - rect.top,
                                                            sample.special.specialMode, sample.special.available);
                         else ConfigureActorInfoBar(widget.object, colored, opacity, rect.right - rect.left, rect.bottom - rect.top,
@@ -547,13 +578,13 @@ namespace TrueHUDLE {
                         const double direction = settings.uMultipleBossBarsStackDirection ? 1 : -1;
                         Position(widget.object, rect.left + (rect.right - rect.left) * settings.fBossBarAnchorX,
                                  rect.top + (rect.bottom - rect.top) * settings.fBossBarAnchorY + direction * bossIndex * settings.fMultipleBossBarsOffset,
-                                 settings.fBossBarScale * 100);
+                                 settings.fBossBarScale * 100, true, &widget.position);
                         ++bossIndex;
                     } else {
                         Position(widget.object, rect.left + (rect.right - rect.left) * sample.screenX,
                                  rect.top + (rect.bottom - rect.top) * (1 - sample.screenY),
                                  DistanceScale(sample.cameraDistance, settings.bInfoBarScaleWithDistance != 0, settings.fInfoBarScale),
-                                 sample.projected && sample.depth > 0 && sample.visible);
+                                 sample.projected && sample.depth > 0 && sample.visible, &widget.position);
                     }
                     GFxValue data[18];
                     const unsigned removal = widget.removal != 255 ? widget.removal : sample.removal;
@@ -624,20 +655,25 @@ namespace TrueHUDLE {
                     if (extras & 4) complete = append(row, 0, 4, 0) && complete;
                     if (!complete) return; // Retry incomplete movie allocation on a later UI frame.
                     depthExtras = extras; depthTopologyChanged = false;
+                    for (auto& widget : widgets) widget.sortedDepth = widget.depth;
+                    for (auto& floatingWidget : floatingWidgets) floatingWidget.sortedDepth = floatingWidget.depth;
+                    depthOrderDirty = true;
                 } else {
                     // Existing numeric properties need no new array/row allocation.
-                    for (auto& widget : widgets) if (widget.handle && widget.object.IsDisplayObject()) {
+                    for (auto& widget : widgets) if (widget.handle && widget.object.IsDisplayObject() && widget.sortedDepth != widget.depth) {
                         GFxValue value; value.SetNumber(widget.depth);
-                        widget.depthRow.SetMember("zIndex", &value);
+                        if (!widget.depthRow.SetMember("zIndex", &value)) return;
+                        widget.sortedDepth = widget.depth; depthOrderDirty = true;
                     }
-                    for (auto& floatingWidget : floatingWidgets) if (floatingWidget.serial && floatingWidget.object.IsDisplayObject()) {
+                    for (auto& floatingWidget : floatingWidgets) if (floatingWidget.serial && floatingWidget.object.IsDisplayObject() && floatingWidget.sortedDepth != floatingWidget.depth) {
                         GFxValue value; value.SetNumber(floatingWidget.depth);
-                        floatingWidget.depthRow.SetMember("zIndex",&value);
+                        if (!floatingWidget.depthRow.SetMember("zIndex",&value)) return;
+                        floatingWidget.sortedDepth = floatingWidget.depth; depthOrderDirty = true;
                     }
                 }
                 // Preserve the supplied movie's own descending zIndex policy,
                 // including relative order of boss/player/loot widgets.
-                view->Invoke("_root.TrueHUD.SortDepths", nullptr, &depthArray, 1);
+                if (depthOrderDirty && view->Invoke("_root.TrueHUD.SortDepths", nullptr, &depthArray, 1)) depthOrderDirty = false;
             }
             void ModifyHUD(const Settings& settings, const GRectF& rect, float opacity) {
                 auto hud = NativeHUD();
@@ -649,16 +685,24 @@ namespace TrueHUDLE {
                 const bool standalone = hideCompass && settings.bDisplayStandaloneShoutWidgetWhenHidingCompass &&
                     (!settings.bEnablePlayerWidget || settings.uPlayerWidgetShoutIndicatorMode == 0);
                 if (standalone && !shoutWidget.IsDisplayObject())
+                {
+                    shoutConfigured = false; shoutPosition.Reset();
                     view->Invoke("_root.TrueHUD.AddShoutIndicatorWidget", &shoutWidget, static_cast<GFxValue*>(nullptr), 0);
+                }
                 if (!standalone && shoutWidget.IsDisplayObject()) {
                     shoutWidget.Invoke("cleanUp", nullptr, nullptr, 0);
                     view->Invoke("_root.TrueHUD.RemoveShoutIndicatorWidget", nullptr, static_cast<GFxValue*>(nullptr), 0);
                     shoutWidget.SetUndefined();
+                    shoutConfigured = false; shoutPosition.Reset();
                 }
                 if (standalone && shoutWidget.IsDisplayObject()) {
-                    ConfigureShoutIndicator(shoutWidget, settings, opacity, rect.right - rect.left, rect.bottom - rect.top);
+                    const double alpha = (settings.bBossBarUseHUDOpacity ? opacity : settings.fBossBarOpacity) * 100.f;
+                    if (!shoutConfigured || shoutOpacity != alpha) {
+                        shoutConfigured = ConfigureShoutIndicator(shoutWidget, settings, opacity, rect.right - rect.left, rect.bottom - rect.top);
+                        if (shoutConfigured) shoutOpacity = alpha;
+                    }
                     Position(shoutWidget, rect.left + (rect.right - rect.left) * settings.fBossBarAnchorX + settings.fBossBarWidth * .5 + 50,
-                        rect.top + (rect.bottom - rect.top) * settings.fBossBarAnchorY, 50);
+                        rect.top + (rect.bottom - rect.top) * settings.fBossBarAnchorY, 50, true, &shoutPosition);
                     GFxValue progress;
                     progress.SetNumber(shoutProgress);
                     shoutWidget.Invoke("setProgress", nullptr, &progress, 1);
@@ -839,7 +883,7 @@ namespace TrueHUDLE {
                 if (loader) CALL_MEMBER_FN(loader, LoadMovie)(this, &view, "TrueHUD", 1, 0.f);
                 flags = 0x00018902;
                 unk0C = 2;
-                Log("TrueHUD Test 5: menu created, movie=%p", view);
+                Log("TrueHUD Test 7: menu created, movie=%p", view);
             }
             ~TrueHUDMenu() override {
                 Log("TrueHUD menu destroying: ticks=%u renders=%u probes=%u", uiTickCount, renderCount, traceCount);
@@ -852,14 +896,17 @@ namespace TrueHUDLE {
                 float delta; memcpy(&delta, &interval, sizeof(delta));
                 if (!std::isfinite(delta) || delta < 0) delta = 0;
                 delta = std::min(delta, .25f);
-                __try { Tick(delta); IMenu::NextFrame(interval, time); }
+                __try {
+                    ULONGLONG start = timing.Begin(); Tick(delta); timing.End(0, start, visibleBosses);
+                    start = timing.Begin(); IMenu::NextFrame(interval, time); timing.End(1, start, visibleBosses);
+                }
                 __except(Fault("menu NextFrame", GetExceptionInformation())) { SafeClear(); }
             }
             void Render() override {
                 __try {
                     if (!renderCount) Log("TrueHUD Render callback thread=%lu", GetCurrentThreadId());
                     if (renderCount != 0xFFFFFFFFu) ++renderCount;
-                    IMenu::Render();
+                    const ULONGLONG start = timing.Begin(); IMenu::Render(); timing.End(2, start, visibleBosses, true);
                 }
                 __except(Fault("menu Render", GetExceptionInformation())) { SafeClear(); }
             }
@@ -897,8 +944,10 @@ namespace TrueHUDLE {
         if (!registered || Disabled()) return;
         auto manager = MenuManager::GetSingleton();
         if (!manager || !manager->IsMenuOpen(&hudName)) return;
-        if (!manager->IsMenuOpen(&menuName)) RequestMenuOpen();
-        RequestFrame();
+        if (!manager->IsMenuOpen(&menuName)) {
+            RequestMenuOpen();
+            RequestFrame(); // recovery only; the open overlay owns steady sampling
+        }
     }
     void RegisterMenu() {
         if (registered) return;

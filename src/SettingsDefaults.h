@@ -1,4 +1,4 @@
-// Generated from supplied TrueHUD 1.1.10 settings.ini; GPL + EXCEPTIONS.
+// Generated from supplied TrueHUD 1.1.10 settings.ini plus LE options; GPL + EXCEPTIONS.
 #pragma once
 #include <cstddef>
 namespace TrueHUDLE {
@@ -149,6 +149,8 @@ struct Settings {
     double uStrongerColorOutline = 13379881;
     double uTeammateColor = 6736947;
     double uTeammateColorOutline = 6736947;
+    double bEnableLogging = 0.0;
+    double uVisibilityUpdateIntervalMS = 100.0;
 };
 struct SettingEntry { const char* id; size_t offset; double initial, minimum, maximum; bool integer, color; };
 inline const SettingEntry SettingEntries[] = {
@@ -298,5 +300,7 @@ inline const SettingEntry SettingEntries[] = {
     {"sStrongerColorOutline:Colors", offsetof(Settings, uStrongerColorOutline), 13379881, 0, 16777215, true, true},
     {"sTeammateColor:Colors", offsetof(Settings, uTeammateColor), 6736947, 0, 16777215, true, true},
     {"sTeammateColorOutline:Colors", offsetof(Settings, uTeammateColorOutline), 6736947, 0, 16777215, true, true},
+    {"bEnableLogging:General", offsetof(Settings, bEnableLogging), 0.0, 0, 1, true, false},
+    {"uVisibilityUpdateIntervalMS:Performance", offsetof(Settings, uVisibilityUpdateIntervalMS), 100.0, 0, 250, true, false},
 };
 }

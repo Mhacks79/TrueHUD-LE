@@ -59,6 +59,16 @@ namespace TrueHUDLE {
         // No remaining overrides means the defaults are authoritative again.
         if (!selected->mask) *selected = {};
     }
+    UInt32 ReadAPIColorRevision() { return colorRevision; }
+    UInt32 ReadAPIColorRevision(UInt32 actor, ColorRevisionMemo& memo) {
+        if (memo.actor != actor || memo.epoch != colorRevision) {
+            memo.actor = actor; memo.epoch = colorRevision; memo.revision = 0;
+            for (const auto& profile : profiles) if (profile.actor == actor && actor) {
+                memo.revision = profile.revision; break;
+            }
+        }
+        return memo.revision;
+    }
     UInt32 CopyAPIColors(UInt32 handle, Settings& settings) {
         for (const auto& profile : profiles) if (profile.actor == handle && handle) {
             for (unsigned i = 0; i < 20; ++i) if (profile.mask & (1u << i)) settings.*colorMembers[i] = profile.colors[i];

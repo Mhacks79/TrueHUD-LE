@@ -39,3 +39,11 @@ The installable mod is the DLL plus files that are not built by `Build.ps1`:
 | Settings and boss rules | `src/SettingsDefaults.h`, the original's `settings.ini` | Generated from the supplied TrueHUD 1.1.10 settings |
 
 No Bethesda master files and no extracted vanilla movies are part of this repository.
+
+## Native LE options and diagnostics
+
+Copy `config/TrueHUD_LE.ini` to `Data/SKSE/Plugins/TrueHUD/TrueHUD_LE.ini` in the mod's runtime package.
+The native compiled defaults match that file. Logging defaults to off; `bEnableLogging=1` enables diagnostics
+and bounded phase timings after restart. Visibility intervals affect ordinary-actor world occlusion only,
+not live health/magicka/stamina reads. See [PERFORMANCE.txt](PERFORMANCE.txt) for limits and comparison steps.
+The GitHub Actions artifact contains the DLL, this INI and licences; it is not the complete installable mod.

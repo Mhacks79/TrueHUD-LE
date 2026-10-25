@@ -25,9 +25,21 @@ mod, to the original **Skyrim Legendary Edition** (`TESV.exe` 1.9.32.0.8, SKSE 1
 no Special Edition, Anniversary Edition or CommonLibSSE-NG code runs here, and every engine address was established
 from the Legendary Edition executable.
 
-> This repository holds the **source** of the port. The version described here is **TrueHUD LE 1.1.10, Test 5**,
+> This repository holds the **source** of the port. The version described here is **TrueHUD LE 1.1.10, Test 7**,
 > a development build: see [`docs/STATUS.md`](docs/STATUS.md) for exactly what has and has not been checked.
 > TrueHUD LE is **not** claimed to have complete feature parity with the Special Edition mod.
+
+## Test 7 changes
+
+Test 7 fixes repeated standalone shout-indicator initialization when boss bars hide the compass, avoids unchanged
+widget transforms and depth sorts, and keeps per-actor color changes from reconfiguring unrelated bars. It includes
+the Test 6 crowd sampling/loot improvements and the earlier menu input and live resource-fill fixes.
+Resource updates and movie animations remain live. The default logging setting is now **off**.
+
+Native options are in [`config/TrueHUD_LE.ini`](config/TrueHUD_LE.ini), installed as
+`Data/SKSE/Plugins/TrueHUD/TrueHUD_LE.ini`. Set `bEnableLogging=1` and restart for bounded sampling/UI/advance/render
+timing diagnostics. See [the performance audit](docs/PERFORMANCE.txt) and [the changelog](CHANGELOG.md).
+Operation-count regressions are not proof of an in-game FPS gain; Test 7 still needs game acceptance.
 
 ## What it draws
 
@@ -79,7 +91,8 @@ powershell -ExecutionPolicy Bypass -File Build.ps1 -Tests   # plus the offline h
 | `sdk/` | The SKSE LE SDK subset the build uses, with its licences |
 | `upstream/TrueHUD/` | An unmodified copy of Ersh's TrueHUD 1.1.10, including its ActionScript 2 and FLA sources, see [`upstream/README.md`](upstream/README.md) |
 | `licenses/` | Licence texts of the third-party code |
-| `docs/` | Status, build notes and the recorded validation |
+| `config/` | Native LE logger and visibility-interval defaults |
+| `docs/` | Status, build notes, performance audit and recorded validation |
 
 ## Licence
 

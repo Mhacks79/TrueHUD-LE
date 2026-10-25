@@ -37,4 +37,4 @@ body:
     id: logs
     attributes:
       label: Logs, screenshot or video
-      description: Documents\My Games\Skyrim\SKSE\TrueHUD.log and the SKSE log
+      description: Logging is off by default. Enable bEnableLogging=1 in TrueHUD_LE.ini, restart, reproduce, and attach Documents\My Games\Skyrim\SKSE\TrueHUD.log plus the SKSE log. For performance issues, wait for a perf timing window with the boss visible.

@@ -13,6 +13,7 @@
 #include "LootIcons.h"
 #include "LootNotifications.h"
 #include "ProcessLifetime.h"
+#include "Timing.h"
 #include <cstring>
 
 namespace TrueHUDLE {
@@ -38,6 +39,10 @@ namespace TrueHUDLE {
         DWORD samplingThread = 0;
         unsigned sampleTraceCount = 0;
         bool lastSampleReady = false;
+        Timing sampleTiming{"sampling"}; // phase0: complete sample task, including engine work
+        VisibilityState visibility[MaxActors]; // sampler-owned scalars, never engine pointers
+        UInt32 visibilityGeneration = 0;
+        LootSample sampledLoot[MaxLoot];
 
         UInt32 Handle(TESObjectREFR* ref) {
             if (!Readable(ref, sizeof(TESObjectREFR)) || ref->formType != kFormType_Character) return 0;
@@ -69,9 +74,7 @@ namespace TrueHUDLE {
             }
             ReleaseSRWLockExclusive(&stateLock);
         }
-        void ProjectSample(ActorSample& sample) {
-            Settings settings;
-            CopySettings(settings);
+        void ProjectSample(ActorSample& sample, const Settings& settings) {
             NiPoint3 point = settings.uInfoBarAnchor ? sample.head : sample.body;
             point.z += static_cast<float>(settings.fInfoBarOffsetZ);
             sample.projected = Project(point, sample.screenX, sample.screenY, sample.depth, &sample.cameraDistance);
@@ -97,28 +100,44 @@ namespace TrueHUDLE {
             for (unsigned i = 0; i < localLootCount; ++i)
                 localLoot[i] = loot[((lootCount == MaxLoot ? lootHead : 0) + i) % MaxLoot];
             ReleaseSRWLockShared(&stateLock);
+            Settings settings;
+            CopySettings(settings); // one coherent configuration snapshot for the whole batch
+            const ULONGLONG now = GetTickCount64();
+            if (visibilityGeneration != next.generation) {
+                memset(visibility, 0, sizeof(visibility));
+                memset(sampledLoot, 0, sizeof(sampledLoot));
+                visibilityGeneration = next.generation;
+            }
             Actor* player = *g_thePlayer;
             const UInt32 playerHandle = active ? Handle(player) : 0;
             next.ready = active && SampleActor(playerHandle, next.player);
             if (next.ready) {
                 for (unsigned i = 0; i < MaxActors; ++i) {
                     if (!local[i].handle || local[i].handle == playerHandle) continue;
+                    if (!settings.bEnableActorInfoBars && !settings.bEnableBossBars) continue;
                     ActorSample sample;
-                    const bool valid = SampleActor(local[i].handle, sample, local[i].handle == next.target);
+                    const bool valid = SampleActor(local[i].handle, sample, local[i].handle == next.target,
+                        &visibility[i], now, static_cast<unsigned>(settings.uVisibilityUpdateIntervalMS));
                     if (valid && (sample.combat || sample.dead || sample.bleeding || local[i].role || local[i].handle == next.target)) {
                         sample.hit = local[i].hit;
                         sample.manualRole = local[i].role;
                         sample.removal = local[i].role ? local[i].removal : 255;
                         if (local[i].role) sample.boss = local[i].role == 2;
-                        ProjectSample(sample);
+                        ProjectSample(sample, settings);
                         next.actors[next.count++] = sample;
                     } else {
+                        visibility[i] = {};
                         AcquireSRWLockExclusive(&stateLock);
                         if (generation == next.generation && handles[i].handle == local[i].handle) handles[i] = {};
                         ReleaseSRWLockExclusive(&stateLock);
                     }
                 }
-                for (unsigned i = 0; i < localLootCount; ++i) {
+                for (unsigned i = 0; settings.bEnableRecentLoot && i < localLootCount; ++i) {
+                    const unsigned slot = localLoot[i].serial % MaxLoot;
+                    if (sampledLoot[slot].serial == localLoot[i].serial) {
+                        next.loot[next.lootCount++] = sampledLoot[slot];
+                        continue;
+                    }
                     TESForm* form = LookupFormByID(localLoot[i].id);
                     if (!Readable(form, sizeof(TESForm))) continue;
                     TESFullName* fullName = DYNAMIC_CAST(form, TESForm, TESFullName);
@@ -129,6 +148,7 @@ namespace TrueHUDLE {
                     item.serial = localLoot[i].serial; item.formID = form->formID;
                     item.count = localLoot[i].count; item.type = form->formType;
                     CopyString(fullName->name.data, item.name, sizeof(item.name));
+                    sampledLoot[slot] = item; // event snapshot; no retained form/name pointers
                 }
                 DamageEvent damage[MaxFloating];
                 const unsigned damageCount = DrainDamageSignals(damage,MaxFloating);
@@ -156,7 +176,9 @@ namespace TrueHUDLE {
         class SampleTask final : public TaskDelegate {
         public:
             void Run() override {
-                __try { SampleFrameBody(); }
+                __try {
+                    const ULONGLONG start = sampleTiming.Begin(); SampleFrameBody(); sampleTiming.End(0, start, 0, true);
+                }
                 __except(Fault("game sample task", GetExceptionInformation())) { ResetState(false); }
             }
             void Dispose() override { InterlockedExchange(&inFlight, 0); }

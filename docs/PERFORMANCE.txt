@@ -1,0 +1,106 @@
+TrueHUD LE Test 7 - performance revision
+======================================
+
+This revision addresses repeated native-to-movie work and keeps the Test 6 crowd improvements. It does not
+establish an in-game FPS gain: the isolated harness uses engine substitutes.
+
+Native actor sampling
+- Resource values, invisibility, position and projection remain live each sample.
+- Ordinary actor world-occlusion probes can reuse a scalar result for the interval
+  in TrueHUD_LE.ini. No actor, scene, physics-result or form pointer is cached.
+- Handle-based phases distribute visibility refreshes across sampling frames.
+- Current targets keep the original LOS bypass; an unavailable LOS graph hides
+  the bar immediately. A generation change clears previous visibility results.
+- Turning both actor and boss bars off skips crowd sampling while preserving
+  tracked handles, so enabling the bars resumes them without new combat events.
+- One settings snapshot is shared across all projections in a sampling batch.
+
+Loot
+- A successful recent-loot event is resolved and classified once. Subsequent
+  frames copy its name, icon and count as owned scalar data. Failed resolution is
+  retried. The bounded cache is reset on load/new game, with the event history.
+- Disabled recent loot does not resolve or classify the stored event history.
+
+UI and diagnostics
+- The open overlay alone schedules steady samples. The native HUD still recovers
+  a closed menu but does not schedule a second sample for an already open one.
+- Per-actor API color profiles and full settings are copied only when widget
+  configuration needs updating. Revision changes still invalidate configuration.
+- Disabled logging returns before formatting, file opening/writes and the log
+  lock. Diagnostic movie probes are also skipped. Old log files may remain from
+  earlier sessions; their presence does not prove logging is currently enabled.
+- Flash timelines, drawing, positioning and changing resource arguments retain
+  their existing update behavior. Input passthrough and menu teardown fixes stay.
+
+Audit decisions and limits
+- Pointer-chain/readiness validation, handle pin/finally release and engine locks
+  remain in place; removing them is not a safe performance optimization.
+- API provider callbacks retain their ownership/revision/failure checks and run
+  while actors are pinned. Changing callback frequency could break client mods.
+- Custom-widget queues, floating text, debug geometry and actor/history capacity
+  are bounded. Their current lifecycle and allocation regression checks remain.
+- The supplied AS2 body/FLA and visual quality are unchanged. Full movie playback,
+  GPU cost, crowd scene frame times and third-party compatibility need game tests.
+- There is no claim of complete parity with the original SE implementation.
+
+Configuration
+Data/SKSE/Plugins/TrueHUD/TrueHUD_LE.ini:
+  [General]
+  bEnableLogging=0
+  [Performance]
+  uVisibilityUpdateIntervalMS=100
+
+Restart Skyrim after editing. Set bEnableLogging=1 for diagnostics. Set the
+visibility interval to 0 for the previous per-frame world-occlusion behavior.
+Higher intervals reduce physical queries while allowing a short visibility
+response delay, plus the wait until the next sample. Values clamp to 0-250ms.
+
+Suggested game comparison
+Use the same save, location, camera and crowded encounter for Test 5 and Test 6.
+Compare frame times/FPS with identical settings, then check partial damage and
+regeneration, bars behind walls, invisible enemies, target changes, loot bursts,
+Tab/inventory/magic navigation, save/reload and normal exit. Enable logging only
+when collecting diagnostics, and confirm the Test 6 marker before reading them.
+
+Isolated operation-count result
+128 actor handles,60 simulated16ms ticks:1351 LOS calls versus7680 for per-frame
+queries. After the initial observations,the largest refresh frame has32 queries
+instead of128. Every changing health value is still read on every sample.
+The synchronized-refresh and duplicate-sampling mutants are separately rejected.
+These counts use engine substitutes and do not measure physical game-world LOS
+cost, GFx/GPU time or FPS on a user's mod list.
+
+Test 7 boss/UI follow-up
+- The standalone shout indicator was receiving loadConfig every frame while boss
+  compass hiding was active. AS2 schedules init, which clears/rebuilds multiple
+  timelines. It now configures on creation/effective opacity changes only, and
+  failed configuration is retried.
+- Successful identical native-owned transforms are not resent. Clip replacement,
+  removal, moving coordinates, scale and visibility changes invalidate the memo.
+  The memo is only an identity token plus scalars; no previous object is dereferenced.
+- Main depth arrays still use the supplied movie sorting policy, but only when
+  topology/depth changes. Custom owners sort only when their rows change. Failed
+  property/array/sort calls retry. Initial allocation/incomplete movies still retry.
+- Color revision memos follow the affected actor. Changing another actor's color
+  no longer reinitializes all bars. Override/revert remains live.
+- updateData and shout progress/keepalive remain live: those methods also control
+  movie state, fade and death timelines. They are not blindly skipped when numeric
+  values seem equal. Native HUD overrides continue as before to cooperate with
+  vanilla HUD updates. Pointer/lifetime/lock safeguards remain in place.
+
+UI operation regression:the actual menu is compiled into the fixture, with SKSE
+GFxValue wrappers redirected to unmanaged fake clips. Over120 frames:shout config1
+instead of120, two total boss/shout transform writes instead of240, one depth sort
+instead of120, all120 changing-health updates retained. Opacity, recreation,
+failed calls, custom widgets, per-actor colors and depth changes are also checked.
+This does not simulate AS2 execution, tessellation, font rendering or GPU cost.
+
+Optional measured diagnostics
+Enable bEnableLogging=1 and restart. perf UI p0 is native Tick including GFx calls;
+p1 is the engine movie advance, including AS2; p2 is the engine movie render.
+perf sampling p0 is the complete game sampling task. Fields include call counts,
+summed inclusive wall microseconds and peaks. Windows are about5seconds, capped
+at12 per instance. peak-bosses records the maximum number displayed in the window.
+Disabled logging skips QueryPerformanceCounter as well as log writes/probes.
+These are diagnostic wall times, not a GPU timer or direct FPS measurements.
+They can include waiting/engine work; counts differ between phases and windows.
